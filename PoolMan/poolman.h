@@ -1,5 +1,5 @@
 /*
- * PoolMan.h
+ * poolman.h
  *
  * Copyright 2021 Luis "Laffin" Espinoza <laffintoo at gmail.com>
  *
@@ -29,6 +29,7 @@
 #endif
 #define POOL_IDX_SIZE (((POOL_KEYS/8)+((POOL_KEYS%8)>0)))
 
+
 // Literal Entry
 // Since 16bits allows for 64k, Dont need anything bigger than int16_t
 typedef struct {
@@ -52,11 +53,10 @@ typedef struct {
 st_poolptrs *PoolBase(void)
 {
    // Hide our Pool from Everyone
-   static char Pool[POOL_SIZE];
+   static char Pool[POOL_SIZE+sizeof(st_poolinfo)+POOL_KEYS*sizeof(st_poolentry);
    static st_poolptrs pi,*pip=NULL;
 
-   if(pip==NULL)
-   {
+   if(pip==NULL)  {
       pi.info=(st_poolinfo *)&Pool;
       pi.entry=(st_poolentry *)&Pool+sizeof(st_poolinfo);
       pi.start=(char *)&Pool+sizeof(st_poolentry)*POOL_KEYS;
@@ -83,8 +83,6 @@ void PoolInit(void)
 #define PoolIdxOff(idx)       (((idx-1)>>3)&0x1FFF)
 #define PoolIdx(pi,idx)       (pi->indexmap[PoolIdxOff(idx)])
 #define PoolIdxInUse(pi,idx)  ((PoolIdx(pi,idx)&PoolIdxBit(idx))>0)
-#define xPoolIdxFree(pi,idx)   (PoolIdx(pi,idx)&=(~PoolIdxBit(idx)))
-#define xPoolIdxSet(pi,idx)    (PoolIdx(pi,idx)|=(PoolIdxBit(idx)))
 
 int PoolIdxFree(st_poolinfo *pi,int idx)
 {
@@ -108,7 +106,7 @@ int PoolIdxNew(st_poolinfo *pi)
    int idx,bit;
 
    for(idx=1;(((unsigned)(idx-1))<POOL_KEYS) && PoolIdx(pi,idx)==0xFF;idx+=8);
-   if(((unsigned)(idx-1))<POOL_IDX_SIZE) {
+   if(((unsigned)(idx-1))<POOL_KEYS) {
       for(bit=0;bit<8 && PoolIdxInUse(pi,idx+bit);bit++);
       idx+=bit;
    } else
@@ -135,18 +133,63 @@ int PoolAddStr(char *str)
    return idx;
 }
 
+void PoolCleanup(void)
+{
+   st_poolptrs *pp=PoolBase();
+   st_poolentry pe[POOL_KEYS],*t1,*t2;
+   int si,di,i,j,entries,midx,offset;
+
+   // Collect all In Use Keys
+   for(i=entries=0;i<POOL_KEYS;i++) {
+      if(PoolIdxInUse(pp->info,i+1)) {
+         pe[entries].offset=pp->entries[i].offset;
+         pe[entries++].length=i;   /* Use length to store index */
+      }
+   }
+   /* Sort by offsets */
+   for(i=0;i<entries-1;i++) {
+      midx=i;
+      for(j=i+1;j<entries;j++) {
+         if(pe[midx].offset>pe[j].offset) midx=j;
+      if(midx!=i) {
+         t1=&pe[i];
+         t2=&pe[midx];
+         t1->offset^=t2.offset;
+         t2.offset^=t1->offset;
+         t1->offset^=pe[midx].offset;
+         t1->length=pe[midx].length
+         t2->length=t1->length
+         t1->length=pe[midx].length
+      }
+   }
+   /* Compress Data */
+   offset=pp->start;
+   for(i=0;i<entries;i++) {
+      t1=&pe[i];
+      if(offset<t1->offset) {
+         t2=&pp->entry[t1->length];
+         for(j=0;j<=t2->length;j++) {
+            *(pp->start+offset+j)=*(pp->start+t2->offset+j);
+         }
+         t2->offset=offset;
+         offset+=t2->length;
+      }
+   }
+}
 int PoolSetStr(int idx,char *str)
 {
    st_poolptrs *pp=PoolBase();
+
    char *start;
    int len,rc=0;
 
    if((((unsigned)(idx-1))<POOL_KEYS) && PoolIdxInUse(pp->info,idx)) {
       for(len=0;*(str+len);len++);
+      pp->entry[idx-1].length=++len;
       pp->entry[idx-1].offset=pp->info->size;
       start=pp->start+pp->info->size;
-      while(len-->0) *(start+len)=*(str+len);
       pp->info->size+=len;
+      while(len-->0) *(start+len)=*(str+len);
       ++rc;
    }
    return rc;
@@ -160,10 +203,9 @@ void PoolDel(int idx)
       PoolIdxFree(pp->info,idx);
       pp->info->entries--;
       if(POOL_SIZE-(POOL_SIZE>>2)<pp->info->size) { // >>2 sets Garbage Collection to occur at 75% Pool Use
-         // TODO: Add Garbage Removal Here
+         PoolCleanup();
       }
    }
-
    return;
 }
 
