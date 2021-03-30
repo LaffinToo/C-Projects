@@ -1,5 +1,5 @@
 /*
- * PoolManTest.c
+ * baseconv.c
  *
  * Copyright (c) 2021 Luis "Laffin" Espinoza <laffin<at>gmail.com>
  * All rights reserved.
@@ -33,30 +33,58 @@
  *
  */
 
- #include <stdio.h>
+/**
+ * @brief Converts integer to ascii
+ * @param sequence   - NULL for up to base 16 or User provided
+ * @param base       - Number Base
+ * @param num        - Number for conversion
+ * @param out_buff   - Pointer to buffer, or NULL if dynamic allocated
+ * @returns          - Pointer to buffer
+ *
+ *
+ */
+char *bcitoa(char *sequence,int base,int num,char *out_buff) {
+   char *dflt="0123456789ABCDEF";
+   char *str,*vals;
+   int max=1,len=1,idx=0;
 
- #define POOL_SIZE (1024)
- #define POOL_KEYS (16)
- #include "poolman.h"
-
-int main(int argc, char **argv)
-{
-   st_poolptrs *pp=PoolBase();
-   int si[5],i;
-   PoolInit(); // Yes You NEED to do this to Init or RESET
-
-   si[0]=PoolAddStr("Hello World!");
-   si[1]=PoolAddStr("Lucie was here");
-   si[2]=PoolAddStr("Meh!");
-   for(i=0;i<5;i++) printf("Wall %d %d: %s\n",i,si[i],PoolGetStr(si[i]));
-   PoolDel(si[1]);
-   for(i=0;i<5;i++) printf("Wall %d %d: %s\n",i,si[i],PoolGetStr(si[i]));
-   si[1]=PoolAddStr("Damn");
-   si[3]=PoolAddStr("Damn");
-   si[4]=PoolAddStr("Damn");
-   PoolSetStr(si[3],"Lucie was here");
-   for(i=0;i<5;i++) printf("Wall %d %d: %s\n",i,si[i],PoolGetStr(si[i]));
-
-   return 0;
-
+   vals=(sequence==NULL)?dflt:sequence;
+   while((max*base)<num) {max*=base;len++;}
+   if(out_buff) {
+      str=out_buff;
+   } else {
+      str=(char *)malloc(1,len+1);
+      str[len]=0;
+   }
+   while(len--) {
+      str[idx++]=vals[(num/max)];
+      num-=(num/max)*max;
+      max/=base;
+   }
+   return str;
 }
+
+/**
+ * @brief Converts an ascii string to an interger
+ * @param sequence   - Default provides up to base 16 Conversion, User may provide his own
+ * @param base       - Base to convert from
+ * @param str        - Ascii string of number
+ * @returns          - integer value of conversion or 0 on error
+ *
+ *
+ */
+int bcatoi(char *sequence,int base,char *str) {
+   char *dflt="0123456789ABCDEF";
+   char *val;
+   int num=0,idx;
+
+   val=(sequence==NULL)?dflt:sequence;
+   while(*str) {
+      for(idx=0;idx<base && *str!=val[idx];idx++);
+      if(idx==base) {num=0;break;}
+      num=(num*base)+idx;
+      str++;
+   }
+   return num;
+}
+
