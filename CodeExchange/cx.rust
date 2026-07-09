@@ -1,0 +1,109 @@
+// CodeExchange (cx) v3.0.0 — Rust Implementation
+use std::env;
+use std::fs::File;
+use std::io::{self, BufReader, Read, Write};
+
+const IO_BUFFER_SIZE: usize = 16384;
+
+fn emit_raw_buffer<W: Write>(output: &mut W, buffer: &[u8]) -> io::Result<()> {
+    if buffer.is_empty() { return Ok(()); }
+    let crc = buffer.iter().fold(0u8, |acc, &b| acc ^ b);
+    output.write_all(buffer)?;
+    write!(output, "|{:02X}\n", crc)
+}
+
+fn flush_run<W: Write>(mut buffer: Vec<u8>, char_byte: u8, mut count: usize, output: &mut W, line_length: usize) -> io::Result<Vec<u8>> {
+    if count == 0 { return Ok(buffer); }
+
+    let normal_seq: &[u8] = match char_byte {
+        b'\n' => b"\\n", b'\t' => b"\\t", b'\r' => b"\\r", b'\\' => b"\\\\",
+        _ => std::slice::from_ref(&char_byte),
+    };
+    let normal_width = normal_seq.len();
+    let max_allowed = if line_length > 4 { line_length - 4 } else { line_length };
+
+    while count > 0 {
+        let chunk = count.min(65535);
+        let raw_cost = normal_width * chunk;
+        let rle_cost = if chunk > 255 { 6 + normal_width } else { 4 + normal_width };
+
+        if line_length > 0 && (buffer.len() + rle_cost > max_allowed) && !buffer.is_empty() {
+            emit_raw_buffer(output, &buffer)?;
+            buffer.clear();
+            continue;
+        }
+
+        if rle_cost < raw_cost {
+            if chunk > 255 {
+                buffer.extend_from_slice(format!("/z{:04X}", chunk).as_bytes());
+            } else {
+                buffer.extend_from_slice(format!("/x{:02X}", chunk).as_bytes());
+            }
+            buffer.extend_from_slice(normal_seq);
+            count -= chunk;
+        } else {
+            let mut process_now = chunk;
+            if line_length > 0 {
+                let space_left = max_allowed.saturating_sub(buffer.len());
+                let max_raw = space_left / normal_width;
+                if max_raw == 0 {
+                    emit_raw_buffer(output, &buffer)?;
+                    buffer.clear();
+                    continue;
+                }
+                process_now = process_now.min(max_raw);
+            }
+            for _ in 0..process_now { buffer.extend_from_slice(normal_seq); }
+            count -= process_now;
+        }
+
+        if line_length > 0 && buffer.len() >= max_allowed {
+            emit_raw_buffer(output, &buffer)?;
+            buffer.clear();
+        }
+    }
+    Ok(buffer)
+}
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 { return Ok(()); }
+
+    if args[1] == "-e" {
+        let mut line_limit = 80;
+        let mut file_idx = 2;
+        if args.len() > 3 && args[2] == "-l" {
+            line_limit = args[3].parse().unwrap_or(80);
+            file_idx = 4;
+        }
+
+        let mut stdout = io::stdout();
+        writeln!(stdout, "CodeExchange format - xc format v3 (Single-Pass Stream Architecture)\n")?;
+
+        for file_path in &args[file_idx..] {
+            let f = File::open(file_path)?;
+            let mut reader = BufReader::with_capacity(IO_BUFFER_SIZE, f);
+            writeln!(stdout, "===== FILE: {} - LL:{} ====", file_path, line_limit)?;
+
+            let (mut global_crc, mut run_count, mut current_byte) = (0u8, 0, 0u8);
+            let mut line_buffer = Vec::new();
+            let mut byte_buf = [0u8; 1];
+
+            while reader.read(&mut byte_buf)? > 0 {
+                let b = byte_buf[0];
+                global_crc ^= b;
+                if run_count == 0 { current_byte = b; run_count = 1; }
+                elif b == current_byte { run_count += 1; }
+                else {
+                    line_buffer = flush_run(line_buffer, current_byte, run_count, &mut stdout, line_limit)?;
+                    current_byte = b; run_count = 1;
+                }
+            }
+            if run_count > 0 { line_buffer = flush_run(line_buffer, current_byte, run_count, &mut stdout, line_limit)?; }
+            emit_raw_buffer(&mut stdout, &line_buffer)?;
+            writeln!(stdout, "===== ENDFILE: {} - FCS:{:02X} ====", file_path, global_crc)?;
+        }
+        writeln!(stdout, "===== EOF")?;
+    }
+    Ok(())
+}
