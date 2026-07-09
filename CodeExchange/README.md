@@ -1,33 +1,23 @@
-# CodeExchange (cx)
+# CodeExchange (cx) — Version 2
 
 CodeExchange (`cx`) is a lightweight, zero-dependency C utility designed to package multiple text files into a single, compact archive format optimized for clean text exchange, LLM prompts, and chat-based transfers. 
 
-Unlike traditional binaries that require specific extraction tools on the receiving end, `cx` supports **Polyglot Archives**—files that act as valid, self-extracting shell scripts (`.sh`) in a Linux/Unix terminal while remaining perfectly readable and parseable by the `cx` binary itself.
+Unlike raw copy-pasting which can be mangled by platform text-formatting engines, `cx` implements a transparent, human-readable layout reinforced by dual-mode Hex Run-Length Encoding (RLE) and strict per-line validation checkpoints.
 
 ---
 
 ## Key Features
 
-*   **Zero Dependencies:** Standard C library compilation—no external compression libraries needed.
-*   **Chat & LLM Friendly:** Replaces binary control characters with clear, explicit literal escape sequences (`\n`, `\t`, `\r`, `\\`).
-*   **Polyglot Compatibility:** The `cx` extraction routine automatically skips execution wrappers, hashbangs, or fallback shell script logic at the top of an archive, cleanly jumping straight to the data payload.
-*   **Line-Wrapping (Formatting Control):** Enforces a maximum line length rule during encoding to prevent data truncation or distortion in strict text boxes.
+* **Human-Transparent Compression:** Uses custom `/x` and `/z` text markers for compression. The output remains 100% human-readable without requiring extraction tools just to see what the code does.
+* **Smart RLE Engine:** Dynamically calculates overhead costs. It skips encoding entirely if raw text takes fewer bytes than compression markers.
+* **Dual-Mode Sizing Hex:** Uses `/xXX` (byte hex) for tight control of small repetitions (up to 255) and automatically scales to `/zXXXX` (word hex) for massive formatting rows (up to 65535).
+* **Anti-Mangle Bumper System:** Embeds an explicit pipe delimiter (`|`) to anchor lines, preventing aggressive forum filters from stripping trailing spaces or tabs via `rtrim()`.
+* **Two-Layer Data Integrity:** Protects snippets using a fast, localized 1-byte XOR checksum per line (`|XX`) along with a global file checksum (`FCS:XX`) inside the container header.
 
 ---
 
-## Core Use Cases
+## Command Line Switches
 
-### 1. Feeding Source Code to LLMs & Chatbots
-When sharing a multi-file coding project with an AI assistant or a colleague over a chat platform, copy-pasting raw text often breaks indentation or triggers layout formatting issues. Encoding the files with `cx` structures the entire codebase into a single, predictable block that is easy to copy, paste, and parse.
-
-### 2. Universal Self-Extracting Script Distribution
-You can prepend a standard shell script header to a generated `.cx` archive. When a Linux user receives the file, they can execute it directly in their terminal using `bash` to extract the files. If they have the `cx` binary installed, they can pass that exact same file directly to `cx -d` for a faster, robust native extraction.
-
----
-
-## Installation & Compilation
-
-Compile the utility using any standard C compiler (like `gcc` or `clang`):
-
+### Encoding Files
 ```bash
-gcc -O3 cx.c -o cx
+cx -e [-l line_length] <file1> [file2 ...]
