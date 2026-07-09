@@ -1,6 +1,7 @@
 /**
- * @file main.c
+ * @file cx.c
  * @brief Program to encode and decode text files in CodeExchange format.
+ *        Supports reading polyglot files containing self-extracting shell scripts.
  */
 
 #include <stdio.h>
@@ -42,7 +43,6 @@ void encode_file(FILE *output, const char *file_path, size_t line_length) {
             current_length = 0;
         }
     }
-
     fprintf(output, "\n");
     fclose(file);
 }
@@ -51,115 +51,128 @@ void encode_files(FILE *output, char *file_paths[], size_t num_files, size_t lin
     fprintf(output, "CodeExchange format - xc format\n");
     fprintf(output, "The following archive consists of various text files in a compressed format suitable for text chat exchange.\n");
     fprintf(output, "\nTo manually decode the files, follow these steps:\n");
-    fprintf(output, "    - '\\n': Newline\n    - '\\t': Tab\n    - '\\r': Carriage return\n    - '\\\\': Backslash\n\n");
+    fprintf(output, "    - '\\n': Newline\n");
+    fprintf(output, "    - '\\t': Tab\n");
+    fprintf(output, "    - '\\r': Carriage return\n");
+    fprintf(output, "    - '\\\\': Backslash\n\n");
 
     for (size_t i = 0; i < num_files; i++) {
         encode_file(output, file_paths[i], line_length);
     }
-
     fprintf(output, "===== EOF\n");
 }
 
-void decode_file(const char *file_path) {
-    FILE *file = fopen(file_path, "r");
-    if (!file) {
-        perror("Error opening file for decoding");
-        exit(EXIT_FAILURE);
-    }
+void decode_archive(FILE *input) {
+    char line[512];
+    int archive_started = 0;
+    FILE *current_output = NULL;
 
-    char encoded_content[MAX_LINE_LENGTH * 2]; // Increased to handle line overflows safely
-    while (fgets(encoded_content, sizeof(encoded_content), file) != NULL) {
-        if (strncmp(encoded_content, "===== FILE:", 11) == 0) {
-            printf("Decoded Content from %s:\n", file_path);
+    while (fgets(line, sizeof(line), input)) {
+        // 1. Skip everything until the official signature is detected
+        if (!archive_started) {
+            if (strstr(line, "CodeExchange format") != NULL) {
+                archive_started = 1;
+            }
+            continue; 
+        }
+
+        // 2. Check for the end of the archive
+        if (strncmp(line, "===== EOF", 9) == 0) {
+            if (current_output) {
+                fclose(current_output);
+                current_output = NULL;
+            }
+            break;
+        }
+
+        // 3. Check for a new file block header
+        if (strncmp(line, "===== FILE:", 11) == 0) {
+            if (current_output) {
+                fclose(current_output);
+            }
+
+            char file_path[256];
+            size_t line_length = 0;
             
-            while (fgets(encoded_content, sizeof(encoded_content), file) != NULL) {
-                if (strncmp(encoded_content, "=====", 5) == 0) {
-                    break; 
-                }
-
-                size_t length = strlen(encoded_content);
-                if (length > 0 && encoded_content[length - 1] == '\n') {
-                    encoded_content[length - 1] = '\0';
-                    length--;
-                }
-
-                for (size_t i = 0; i < length; i++) {
-                    if (encoded_content[i] == '\\' && (i + 1) < length) {
-                        switch (encoded_content[i + 1]) {
-                            case 'n':  putchar('\n'); break;
-                            case 't':  putchar('\t'); break;
-                            case 'r':  putchar('\r'); break;
-                            case '\\': putchar('\\'); break;
-                            default:   putchar(encoded_content[i]); putchar(encoded_content[i+1]); break;
-                        }
-                        i++; // Skip the escaped character identifier
-                    } else {
-                        putchar(encoded_content[i]);
-                    }
+            // Extract the filename and line length rule
+            if (sscanf(line, "===== FILE: %255s - LL:%zu ====", file_path, &line_length) == 2) {
+                current_output = fopen(file_path, "w");
+                if (!current_output) {
+                    perror("Failed to create output file");
                 }
             }
-            printf("\n");
+            continue;
+        }
+
+        // 4. Decode content lines into the active file stream
+        if (current_output) {
+            size_t len = strlen(line);
+            // Strip trailing newlines added by formatting/wrapping
+            if (len > 0 && line[len - 1] == '\n') {
+                line[len - 1] = '\0';
+                len--;
+            }
+
+            for (size_t i = 0; i < len; i++) {
+                if (line[i] == '\\' && i + 1 < len) {
+                    switch (line[i + 1]) {
+                        case 'n': fputc('\n', current_output); break;
+                        case 't': fputc('\t', current_output); break;
+                        case 'r': fputc('\r', current_output); break;
+                        case '\\': fputc('\\', current_output); break;
+                        default:
+                            // Fallback if it wasn't a standard escape sequence
+                            fputc(line[i], current_output);
+                            fputc(line[i + 1], current_output);
+                            break;
+                    }
+                    i++; // Skip past the escape target character
+                } else {
+                    fputc(line[i], current_output);
+                }
+            }
         }
     }
-    fclose(file);
-}
-
-void display_usage(const char *program_name) {
-    printf("Usage:\n");
-    printf("  To encode: %s [-l line_length] -e <output_file> <file1> <file2> ...\n", program_name);
-    printf("  To decode: %s -d <archive_file>\n", program_name);
 }
 
 int main(int argc, char *argv[]) {
-    size_t line_length = MAX_LINE_LENGTH;
-    int curarg = 1;
-
-    if (argc < 3) {
-        display_usage(argv[0]);
+    if (argc < 2) {
+        fprintf(stderr, "Usage:\n  Encode: %s -e [-l line_length] <file1> [file2 ...]\n  Decode: %s -d <archive_file>\n", argv[0], argv[0]);
         return EXIT_FAILURE;
     }
 
-    // Parse line length option if present
-    if (strcmp(argv[curarg], "-l") == 0) {
-        if (curarg + 1 >= argc || !isdigit((unsigned char)argv[curarg + 1][0])) {
-            display_usage(argv[0]);
-            return EXIT_FAILURE;
-        }
-        line_length = (size_t)atoi(argv[curarg + 1]);
-        curarg += 2;
-    }
+    if (strcmp(argv[1], "-e") == 0) {
+        size_t line_length = MAX_LINE_LENGTH;
+        int file_idx = 2;
 
-    if (curarg >= argc) {
-        display_usage(argv[0]);
-        return EXIT_FAILURE;
-    }
-
-    // Parse Action
-    if (strcmp(argv[curarg], "-e") == 0) {
-        if (argc < curarg + 3) { // Needs -e, output_file, and at least 1 input file
-            display_usage(argv[0]);
-            return EXIT_FAILURE;
+        if (argc > 3 && strcmp(argv[2], "-l") == 0) {
+            line_length = (size_t)strtoul(argv[3], NULL, 10);
+            file_idx = 4;
         }
-        const char *out_filename = argv[curarg + 1];
-        printf("Output file: %s\n", out_filename);
-        
-        FILE *output = fopen(out_filename, "w");
-        if (!output) {
-            perror("Error opening output file");
+
+        if (file_idx >= argc) {
+            fprintf(stderr, "Error: No input files specified for encoding.\n");
             return EXIT_FAILURE;
         }
 
-        encode_files(output, argv + curarg + 2, argc - curarg - 2, line_length);
-        fclose(output);
-    } else if (strcmp(argv[curarg], "-d") == 0) {
-        if (curarg + 1 >= argc) {
-            display_usage(argv[0]);
+        encode_files(stdout, &argv[file_idx], argc - file_idx, line_length);
+
+    } else if (strcmp(argv[1], "-d") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Error: No archive file specified for decoding.\n");
             return EXIT_FAILURE;
         }
-        decode_file(argv[curarg + 1]); // Fixed passing the filename instead of "-d"
+
+        FILE *archive = fopen(argv[2], "r");
+        if (!archive) {
+            perror("Error opening archive file");
+            return EXIT_FAILURE;
+        }
+
+        decode_archive(archive);
+        fclose(archive);
     } else {
-        fprintf(stderr, "Invalid option. Use -e for encoding or -d for decoding.\n");
-        display_usage(argv[0]);
+        fprintf(stderr, "Invalid option: %s\n", argv[1]);
         return EXIT_FAILURE;
     }
 
